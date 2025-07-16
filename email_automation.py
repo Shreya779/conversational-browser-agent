@@ -30,7 +30,7 @@ except ImportError:
 from app.services.ai_content_generator import AIContentGenerator
 from app.services.browser_controller import BrowserController
 
-async def run_email_automation(message: str, email: str = None, password: str = None):
+async def run_email_automation(message: str, email: str = None, password: str = None, username: str = None):
     """Run the full email automation workflow"""
     try:
         from app.services.ai_content_generator import AIContentGenerator
@@ -43,9 +43,64 @@ async def run_email_automation(message: str, email: str = None, password: str = 
             "data": {}
         }
         
+        # Extract user name from message if not provided
+        if not username and "from" in message:
+            name_match = re.search(r'from\s+([^,\.]+)', message)
+            if name_match:
+                username = name_match.group(1).strip()
+                print(f"Extracted username from message: {username}")
+        
         # Use provided credentials or fall back to config file
         gmail_email = email or GMAIL_EMAIL
         gmail_password = password or GMAIL_PASSWORD
+        
+        # Extract name from email address if username still not available
+        if not username and gmail_email:
+            # Try to extract a name from the email address (e.g., johndoe@gmail.com -> John Doe)
+            email_name_part = gmail_email.split('@')[0]
+            
+            # Convert common formats to proper names
+            if '.' in email_name_part:
+                # Format: first.last@gmail.com -> First Last
+                name_parts = email_name_part.split('.')
+                name_parts = [part.capitalize() for part in name_parts if part]
+                username = ' '.join(name_parts)
+            else:
+                # First remove numbers
+                name_parts = re.sub(r'[0-9]', '', email_name_part)
+                
+                # Try to split by common patterns
+                # First, handle underscore separation
+                if '_' in name_parts:
+                    name_parts = name_parts.replace('_', ' ')
+                
+                # Handle common Indian names that don't have separators (like ayushladdha)
+                # This uses a heuristic to find potential word boundaries in names without separators
+                if len(name_parts) > 6 and not ' ' in name_parts:
+                    # Try to find common prefixes/suffixes in Indian names
+                    common_parts = ['kumar', 'lal', 'singh', 'sharma', 'devi', 'das', 'gupta', 'raj', 'laddha']
+                    for part in common_parts:
+                        if part in name_parts.lower():
+                            index = name_parts.lower().find(part)
+                            if index > 0:  # Not at the beginning
+                                name_parts = name_parts[:index] + ' ' + name_parts[index:]
+                    
+                    # If still no spaces and longer than 6 chars, try to insert space in the middle
+                    if len(name_parts) > 6 and not ' ' in name_parts:
+                        # Try to split after consonant followed by vowel (common pattern in names)
+                        name_parts = re.sub(r'([bcdfghjklmnpqrstvwxyz])([aeiou])', r'\1 \2', name_parts, flags=re.IGNORECASE, count=1)
+                
+                # Handle camelCase (johnDoe -> John Doe)
+                name_parts = re.sub(r'([a-z])([A-Z])', r'\1 \2', name_parts)
+                
+                # Capitalize each part
+                if name_parts:
+                    name_parts = ' '.join([part.capitalize() for part in name_parts.split()])
+                    username = name_parts
+                else:
+                    username = email_name_part.capitalize()
+            
+            print(f"Extracted name from email address: {username}")
         
         # Extract email context
         if "email" in message.lower():
@@ -58,7 +113,25 @@ async def run_email_automation(message: str, email: str = None, password: str = 
             ai_generator = AIContentGenerator()
             
             print("Generating email content...")
-            subject, body = await ai_generator.generate_email_content(message, recipient)
+            
+            # Check if this is a leave application
+            if "leave application" in message.lower() or "leave request" in message.lower():
+                # Extract leave dates
+                dates_match = re.search(r'during\s+([^,\.]+)', message)
+                leave_dates = dates_match.group(1).strip() if dates_match else "the requested dates"
+                
+                subject, body = await ai_generator.generate_leave_application(
+                    leave_dates=leave_dates,
+                    manager_email=recipient,
+                    user_name=username
+                )
+                print(f"Generated leave application email for {username} during {leave_dates}")
+            else:
+                subject, body = await ai_generator.generate_email_content(
+                    context=message, 
+                    recipient=recipient, 
+                    user_name=username
+                )
             
             print("Starting browser...")
             browser_controller = BrowserController()
@@ -208,6 +281,7 @@ def main():
     parser.add_argument("--output", help="Output file for results", default=None)
     parser.add_argument("--email", help="Gmail email address", default=None)
     parser.add_argument("--password", help="Gmail password", default=None)
+    parser.add_argument("--username", help="User's full name for email signature", default=None)
     
     args = parser.parse_args()
     
@@ -221,7 +295,7 @@ def main():
         print(f"Using provided Gmail credentials for: {args.email}")
     
     # Run automation
-    result = asyncio.run(run_email_automation(args.message, args.email, args.password))
+    result = asyncio.run(run_email_automation(args.message, args.email, args.password, args.username))
     
     # Output results
     if args.output:

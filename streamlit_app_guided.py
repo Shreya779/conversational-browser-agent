@@ -157,6 +157,15 @@ def send_message_to_backend(message: str) -> Dict[str, Any]:
         elif st.session_state.conversation_state == "ask_leave_dates":
             # Save the leave dates
             st.session_state.email_data["leave_dates"] = message.strip()
+            st.session_state.conversation_state = "ask_user_name"
+            return {
+                "type": "conversation",
+                "message": "What's your full name to include in the email signature?"
+            }
+            
+        elif st.session_state.conversation_state == "ask_user_name":
+            # Save the user's name
+            st.session_state.email_data["user_name"] = message.strip()
             st.session_state.conversation_state = "ask_manager_email"
             return {
                 "type": "conversation",
@@ -177,7 +186,7 @@ def send_message_to_backend(message: str) -> Dict[str, Any]:
         elif st.session_state.conversation_state == "sending_email" and message.lower() in ["continue", "proceed", "go ahead", "send it", "send email"]:
             # Now we'll actually run the email automation
             email_data = st.session_state.email_data
-            email_request = f"Send a leave application to {email_data['manager_email']} for leave during {email_data['leave_dates']}"
+            email_request = f"Send a leave application to {email_data['manager_email']} for leave during {email_data['leave_dates']} from {email_data.get('user_name', 'User')}"
             
             # Reset for next conversation
             st.session_state.conversation_state = "initial"
@@ -187,6 +196,14 @@ def send_message_to_backend(message: str) -> Dict[str, Any]:
                 temp_file = f.name
                 
             # Add sequence of visual update messages to the conversation
+            if "user_name" in email_data:
+                user_name_msg = f"Using '{email_data['user_name']}' as your name in the email signature."
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": user_name_msg,
+                    "type": "update"
+                })
+                
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": "Opening Gmail website...",
@@ -203,7 +220,9 @@ def send_message_to_backend(message: str) -> Dict[str, Any]:
                 "--email",
                 email_data["email"],
                 "--password",
-                email_data["password"]
+                email_data["password"],
+                "--username",
+                email_data.get("user_name", "")
             ]
             
             # Run with timeout

@@ -10,7 +10,19 @@ logger = logging.getLogger(__name__)
 
 class AIContentGenerator:
     """
-    AI-powered content generation using FREE services:
+    AI-powered content gener            # Ensure we have reasonable content
+            if not subject:
+                subject = f"Regarding: {context}"
+            
+            if not body:
+                body = f"Dear recipient,\n\nI hope this email finds you well.\n\n{context}\n\nThank you for your time and consideration.\n\nBest regards,\n[Your Name]"
+            
+            # Replace [Your Name] with user_name if provided
+            if user_name:
+                body = body.replace("[Your Name]", user_name)
+            
+            logger.info(f"Generated email - Subject: {subject[:50]}...")
+            return subject, bodyng FREE services:
     - Groq (free tier with fast inference)
     - Hugging Face (free inference API)
     - OpenAI (backup if you have credits)
@@ -91,41 +103,64 @@ class AIContentGenerator:
         except Exception as e:
             logger.error(f"Failed to initialize OpenAI: {e}")
     
-    async def generate_email_content(self, context: str, recipient: str) -> Tuple[str, str]:
+    def _check_api_key(self) -> bool:
+        """Check if the current service has a valid API key configured"""
+        if self.service == "groq":
+            return bool(settings.GROQ_API_KEY and len(settings.GROQ_API_KEY) > 10)
+        elif self.service == "huggingface":
+            return bool(settings.HUGGINGFACE_API_KEY and len(settings.HUGGINGFACE_API_KEY) > 10)
+        elif self.service == "openai":
+            return bool(settings.OPENAI_API_KEY and len(settings.OPENAI_API_KEY) > 10)
+        return False
+    
+    async def generate_email_content(self, context: str, recipient: str, user_name: str = None) -> Tuple[str, str]:
         """
         Generate professional email subject and body based on context
         
         Args:
             context: The purpose/context of the email (e.g., "leave application for Monday to Wednesday")
             recipient: Email recipient (e.g., "manager@company.com")
+            user_name: Optional name of the sender to replace [Your Name] placeholder
         
         Returns:
             Tuple of (subject, body)
         """
         try:
             if self.service == "groq":
-                return await self._generate_with_groq(context, recipient)
+                return await self._generate_with_groq(context, recipient, user_name)
             elif self.service == "huggingface":
-                return await self._generate_with_huggingface(context, recipient)
+                return await self._generate_with_huggingface(context, recipient, user_name)
             elif self.service == "openai":
-                return await self._generate_with_openai(context, recipient)
+                return await self._generate_with_openai(context, recipient, user_name)
             else:
-                return self._generate_fallback_content(context, recipient)
+                result = self._generate_fallback_content(context, recipient)
+                # Handle fallback replacement of [Your Name]
+                if user_name and isinstance(result, tuple) and len(result) == 2:
+                    subject, body = result
+                    body = body.replace("[Your Name]", user_name)
+                    return subject, body
+                return result
                 
         except Exception as e:
             logger.error(f"Failed to generate email content with {self.service}: {e}")
-            return self._generate_fallback_content(context, recipient)
+            result = self._generate_fallback_content(context, recipient)
+            # Handle fallback replacement of [Your Name]
+            if user_name and isinstance(result, tuple) and len(result) == 2:
+                subject, body = result
+                body = body.replace("[Your Name]", user_name)
+                return subject, body
+            return result
     
-    async def _generate_with_groq(self, context: str, recipient: str) -> Tuple[str, str]:
+    async def _generate_with_groq(self, context: str, recipient: str, user_name: str = None) -> Tuple[str, str]:
         """Generate content using Groq (FREE tier)"""
         try:
-            prompt = self._build_email_prompt(context, recipient)
+            prompt = self._build_email_prompt(context, recipient, user_name)
             
             # Use Groq's fastest and most reliable model for email generation
             response = self.groq_client.chat.completions.create(
                 model="llama3-8b-8192",  # Fast and reliable model on Groq
                 messages=[
-                    {"role": "system", "content": "You are a professional email writing assistant. Generate clear, courteous, and well-structured business emails. Always format your response with 'SUBJECT:' followed by the subject line, then 'BODY:' followed by the email body."},
+                    {"role": "system", "content": "You are a professional email writing assistant. Generate clear, courteous, and well-structured business emails. Always format your response with 'SUBJECT:' followed by the subject line, then 'BODY:' followed by the email body. Use [Your Name] as a placeholder for the signature."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=400,
@@ -136,16 +171,24 @@ class AIContentGenerator:
             
             content = response.choices[0].message.content
             logger.info(f"Groq API response received: {len(content)} characters")
-            return self._parse_email_response(content, context)
+            result = self._parse_email_response(content, context)
+            
+            # Replace [Your Name] with the actual name if provided
+            if user_name and isinstance(result, tuple) and len(result) == 2:
+                subject, body = result
+                body = body.replace("[Your Name]", user_name)
+                return subject, body
+                
+            return result
             
         except Exception as e:
             logger.error(f"Groq generation failed: {e}")
             return self._generate_fallback_content(context, recipient)
     
-    async def _generate_with_huggingface(self, context: str, recipient: str) -> Tuple[str, str]:
+    async def _generate_with_huggingface(self, context: str, recipient: str, user_name: str = None) -> Tuple[str, str]:
         """Generate content using Hugging Face (FREE)"""
         try:
-            prompt = self._build_email_prompt(context, recipient)
+            prompt = self._build_email_prompt(context, recipient, user_name)
             
             payload = {
                 "inputs": prompt,
@@ -179,10 +222,10 @@ class AIContentGenerator:
             logger.error(f"HuggingFace generation failed: {e}")
             return self._generate_fallback_content(context, recipient)
     
-    async def _generate_with_openai(self, context: str, recipient: str) -> Tuple[str, str]:
+    async def _generate_with_openai(self, context: str, recipient: str, user_name: str = None) -> Tuple[str, str]:
         """Generate content using OpenAI (backup option)"""
         try:
-            prompt = self._build_email_prompt(context, recipient)
+            prompt = self._build_email_prompt(context, recipient, user_name)
             
             response = self.openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -201,8 +244,12 @@ class AIContentGenerator:
             logger.error(f"OpenAI generation failed: {e}")
             return self._generate_fallback_content(context, recipient)
     
-    def _build_email_prompt(self, context: str, recipient: str) -> str:
+    def _build_email_prompt(self, context: str, recipient: str, user_name: str = None) -> str:
         """Build the prompt for email generation"""
+        signature_instruction = "End with 'Best regards,' followed by '[Your Name]' as a placeholder for the signature."
+        if user_name:
+            signature_instruction = f"End with 'Best regards,' followed by '{user_name}' as the signature."
+            
         return f"""
 Generate a professional email with the following details:
 
@@ -214,6 +261,8 @@ Please generate:
 2. A well-structured email body that is courteous and professional
 
 The email should be formal but friendly, and include all necessary details.
+{signature_instruction}
+
 Format your response exactly as:
 SUBJECT: [subject line]
 BODY: [email body]
@@ -276,20 +325,19 @@ BODY: [email body]
         context_lower = context.lower()
         
         if "leave" in context_lower or "vacation" in context_lower:
-            subject = f"Leave Application Request"
+            subject = f"Leave Application for [Date]"
             body = f"""Dear Manager,
 
-I hope this email finds you well.
+I hope this email finds you in excellent spirits and high spirits. As we navigate the complexities of life, I wanted to take a moment to express my heartfelt wishes for your future. It is my sincere hope that you continue to grow and thrive, and that your path is illuminated by success, happiness, and fulfillment.
 
-I would like to formally request time off for {context}.
+As we look to the future, I am confident that your unique blend of skills, talents, and passions will serve you well in achieving your goals. Your dedication, perseverance, and resilience are qualities that will undoubtedly guide you through any challenges that come your way.
 
-I will ensure all my current projects are up to date and will coordinate with my team to handle any urgent matters during my absence.
+I would like to take this opportunity to offer my support and encouragement as you embark on this new chapter. If there is anything I can do to help or provide guidance, please do not hesitate to reach out.
 
-Please let me know if you need any additional information or if there are any concerns regarding this request.
+Once again, I wish you all the best for your future endeavors. May it be filled with joy, prosperity, and endless possibilities.
 
-Thank you for your consideration.
-
-Best regards"""
+Best regards,
+[Your Name]"""
             
         elif "meeting" in context_lower:
             subject = f"Meeting Request - {context}"
@@ -321,16 +369,41 @@ Best regards"""
         
         return subject, body
     
-    async def generate_leave_application(self, leave_dates: str, manager_email: str) -> Tuple[str, str]:
+    async def generate_leave_application(self, leave_dates: str, manager_email: str, user_name: str = None) -> Tuple[str, str]:
         """Generate specific leave application email"""
-        context = f"leave application for {leave_dates}"
-        return await self.generate_email_content(context, manager_email)
+        # Option 1: Use AI generation
+        if self.service in ["groq", "huggingface", "openai"] and self._check_api_key():
+            context = f"leave application for {leave_dates}"
+            subject, body = await self.generate_email_content(context, manager_email)
+        # Option 2: Use predefined template
+        else:
+            recipient_name = manager_email.split('@')[0].capitalize() if '@' in manager_email else "Manager"
+            subject = f"Leave Application for {leave_dates}"
+            body = f"""Dear {recipient_name},
+
+I hope this email finds you in excellent spirits and high spirits. As we navigate the complexities of life, I wanted to take a moment to express my heartfelt wishes for your future. It is my sincere hope that you continue to grow and thrive, and that your path is illuminated by success, happiness, and fulfillment.
+
+As we look to the future, I am confident that your unique blend of skills, talents, and passions will serve you well in achieving your goals. Your dedication, perseverance, and resilience are qualities that will undoubtedly guide you through any challenges that come your way.
+
+I would like to take this opportunity to offer my support and encouragement as you embark on this new chapter. If there is anything I can do to help or provide guidance, please do not hesitate to reach out.
+
+Once again, I wish you all the best for your future endeavors. May it be filled with joy, prosperity, and endless possibilities.
+
+Best regards,
+[Your Name]"""
+        
+        # Replace the placeholders if user_name is provided
+        if user_name:
+            body = body.replace("[Your Name]", user_name)
+            body = body.replace("[Date]", leave_dates)
+            
+        return subject, body
     
-    async def generate_meeting_email(self, meeting_details: str, recipient: str) -> Tuple[str, str]:
+    async def generate_meeting_email(self, meeting_details: str, recipient: str, user_name: str = None) -> Tuple[str, str]:
         """Generate meeting-related email"""
         context = f"meeting regarding {meeting_details}"
-        return await self.generate_email_content(context, recipient)
+        return await self.generate_email_content(context, recipient, user_name)
     
-    async def generate_general_email(self, purpose: str, recipient: str) -> Tuple[str, str]:
+    async def generate_general_email(self, purpose: str, recipient: str, user_name: str = None) -> Tuple[str, str]:
         """Generate general purpose email"""
-        return await self.generate_email_content(purpose, recipient)
+        return await self.generate_email_content(purpose, recipient, user_name)
